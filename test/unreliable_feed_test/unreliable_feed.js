@@ -21,7 +21,8 @@ const tap = require('tap');
 
 // mock server options:
 const port = 3000;
-const totalUpdates = 500;
+const totalUpdates = 200;
+const totalContinuousUpdates = 100;
 
 var mockServer;
 
@@ -33,11 +34,12 @@ tap.beforeEach(function(done) {
     '--delay-probability', 0.1,
     '--error-probability', 0.3,
     '--heartbeat', 6000,
-    '--last-seq-every', 181,
+    '--last-seq-every', 78,
     '--min-delay', 100,
     '--max-delay', 5000,
     '--port', port,
-    '--total-updates', totalUpdates
+    '--total-updates', totalUpdates,
+    '--timeout', 60000
   ]);
   // capture stdout/stderr
   mockServer.stderr.on('data', (data) => {
@@ -56,12 +58,14 @@ tap.afterEach(function(done) {
   done();
 });
 
-tap.test('Captures all changes in unreliable `/_changes` feed', { timeout: 300000 }, function(t) {
+// feed=continuous
+
+tap.test('Captures all changes in unreliable continuous `/_changes` feed', { timeout: 300000 }, function(t) {
   var actualChanges = [];
   var expectedChanges = [];
 
   // build expected changes array
-  for (let i = 1; i <= totalUpdates; i++) {
+  for (let i = 1; i <= totalContinuousUpdates; i++) {
     expectedChanges.push(`doc${i}`);
   }
 
@@ -73,13 +77,14 @@ tap.test('Captures all changes in unreliable `/_changes` feed', { timeout: 30000
       t.fail(`Unexpected error: ${error}`);
     })
     .on('change', function(change) {
-      let i = actualChanges.indexOf(change.id);
-      t.equal(i, -1, `Unseen change for doc '${change.id}'.`);
-      t.ok(change.seq, 'Valid seq for change.');
-
-      actualChanges.push(change.id);
-      if (actualChanges.length === totalUpdates) {
+      if (actualChanges.length >= totalContinuousUpdates) {
         feed.stop();
+      } else {
+        let i = actualChanges.indexOf(change.id);
+        t.equal(i, -1, `Unseen change for doc '${change.id}'.`);
+        t.ok(change.seq, 'Valid seq for change.');
+
+        actualChanges.push(change.id);
       }
     })
     .on('stop', function() {
@@ -90,12 +95,12 @@ tap.test('Captures all changes in unreliable `/_changes` feed', { timeout: 30000
   feed.follow();
 });
 
-tap.test('Captures all changes in unreliable `/_db_updates` feed', { timeout: 300000 }, function(t) {
+tap.test('Captures all changes in unreliable continuous `/_db_updates` feed', { timeout: 300000 }, function(t) {
   var actualUpdates = [];
   var expectedUpdates = [];
 
   // build expected updates array
-  for (let i = 1; i <= totalUpdates; i++) {
+  for (let i = 1; i <= totalContinuousUpdates; i++) {
     expectedUpdates.push(`db${i}`);
   }
 
@@ -107,16 +112,85 @@ tap.test('Captures all changes in unreliable `/_db_updates` feed', { timeout: 30
       t.fail(`Unexpected error: ${error}`);
     })
     .on('change', function(change) {
+      if (actualUpdates.length >= totalContinuousUpdates) {
+        feed.stop();
+      } else {
+        let i = actualUpdates.indexOf(change.db_name);
+        t.equal(i, -1, `Unseen update for db '${change.db_name}'.`);
+        t.equal(change.type, 'created', 'Found expected change type "created".');
+
+        actualUpdates.push(change.db_name);
+      }
+    })
+    .on('stop', function() {
+      t.deepEqual(actualUpdates, expectedUpdates);
+      t.end();
+    });
+
+  feed.follow();
+});
+
+// feed=normal
+
+tap.test('Captures all changes in unreliable normal `/_changes` feed', { timeout: 300000 }, function(t) {
+  var actualChanges = [];
+  var expectedChanges = [];
+
+  // build expected changes array
+  for (let i = 1; i <= totalUpdates; i++) {
+    expectedChanges.push(`doc${i}`);
+  }
+
+  var feed = new follow.Feed();
+  feed.db = `http://localhost:${port}/foo`;
+  feed.feed = 'normal';
+
+  feed
+    .on('error', function(error) {
+      t.fail(`Unexpected error: ${error}`);
+    })
+    .on('change', function(change) {
+      let i = actualChanges.indexOf(change.id);
+      t.equal(i, -1, `Unseen change for doc '${change.id}'.`);
+      t.ok(change.seq, 'Valid seq for change.');
+
+      actualChanges.push(change.id);
+    })
+    .on('last_seq', function(seq) {
+      t.equal(seq, '200-xxxxxxxx');
+      t.deepEqual(actualChanges, expectedChanges);
+      t.end();
+    });
+
+  feed.follow();
+});
+
+tap.test('Captures all changes in unreliable normal `/_db_updates` feed', { timeout: 300000 }, function(t) {
+  var actualUpdates = [];
+  var expectedUpdates = [];
+
+  // build expected updates array
+  for (let i = 1; i <= totalUpdates; i++) {
+    expectedUpdates.push(`db${i}`);
+  }
+
+  var feed = new follow.Feed();
+  feed.db = `http://localhost:${port}/_db_updates`;
+  feed.feed = 'normal';
+
+  feed
+    .on('error', function(error) {
+      t.fail(`Unexpected error: ${error}`);
+    })
+    .on('change', function(change) {
       let i = actualUpdates.indexOf(change.db_name);
       t.equal(i, -1, `Unseen update for db '${change.db_name}'.`);
       t.equal(change.type, 'created', 'Found expected change type "created".');
 
       actualUpdates.push(change.db_name);
-      if (actualUpdates.length === totalUpdates) {
-        feed.stop();
-      }
     })
-    .on('stop', function() {
+    .on('last_seq', function(seq) {
+      t.equal(seq, '200-xxxxxxxx');
       t.deepEqual(actualUpdates, expectedUpdates);
       t.end();
     });

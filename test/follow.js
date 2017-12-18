@@ -281,6 +281,31 @@ test('Events for DB confirmation and hitting the original seq', function(t) {
   }
 })
 
+test('Query changes with "Normal" feed type', function(t) {
+  var feed = follow({'db': couch.DB, 'feed': 'normal'});
+  var changes = [];
+
+  feed.on('change', function(change) {
+    changes.push(change);
+  });
+
+  feed.on('last_seq', function(seq) {
+    t.equal(seq, 3);
+    t.equal(changes.length, 3);
+
+    var docIds = [];
+    changes.forEach(function(change) {
+      docIds.push(change.id);
+    });
+
+    docIds = docIds.sort();
+    t.equal(docIds[0], 'doc_first');
+    t.equal(docIds[1], 'doc_second');
+    t.equal(docIds[2], 'doc_third');
+    t.end();
+  });
+});
+
 test('Handle a deleted database', function(t) {
   var feed = follow(couch.DB, function(er, change) {
     if(er){

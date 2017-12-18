@@ -66,7 +66,7 @@ test('Ignore invalid `/_changes` feed parameters', function(t) {
   feed.foo = 'bar'; // invalid feed parameter
 
   feed.on('query', function(req) {
-    t.equal(req.uri.query, 'feed=continuous&heartbeat=30000&since=0');
+    t.equal(req.uri.query, 'feed=continuous&heartbeat=30000&seq_interval=1&since=0');
     t.end();
   });
 

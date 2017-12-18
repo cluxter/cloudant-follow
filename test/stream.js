@@ -281,6 +281,75 @@ test('Continuous pause', function(t) {
   }
 })
 
+test('Normal feed', function(t) {
+  function encode(data) { return (i === 0) ? data : new Buffer(data); }
+  function write(data) { return function() { feed.write(encode(data)); }; }
+  function end(data) { return function() { feed.end(encode(data)); }; }
+
+  for (var i = 0; i < 2; i++) {
+    var feed = new follow.Changes({'feed': 'normal'});
+
+    var data = [];
+    feed.on('data', function(d) { data.push(d); });
+
+    t.doesNotThrow(write('{"results":[\n')  , 'Normal header');
+    t.doesNotThrow(write('{},\n')           , 'Empty object');
+    t.doesNotThrow(write('{"foo":"bar"},\n'), 'One object');
+    t.doesNotThrow(write('{"two":"bar"},\n'), 'Another object');
+    t.doesNotThrow(write('{"three":3}\n')   , 'Yet another object');
+    t.doesNotThrow(write('],\n')            , 'Closing brace');
+    t.doesNotThrow(end('"last_seq":3}\n')   , 'Normal footer');
+
+    t.equal(data.length, 5               , 'Five data events fired');
+    t.equal(data[0]    , '{}'            , 'First object emitted');
+    t.equal(data[1]    , '{"foo":"bar"}' , 'Second object emitted');
+    t.equal(data[2]    , '{"two":"bar"}' , 'Third object emitted');
+    t.equal(data[3]    , '{"three":3}'   , 'Fourth object emitted');
+    t.equal(data[4]    , '{"last_seq":3}', 'Fifth object emitted');
+  }
+
+  t.end();
+});
+
+test('Normal pause', function(t) {
+  var feed = new follow.Changes({'feed':'normal'});
+
+  var all = '{"results":[\n{"change":1},\n{"second":"change"},\n{"change":"#3"}\n],\n"last_seq":3}';
+  var start = new Date();
+  var events = [];
+
+  feed.on('data', function(change) {
+    change = JSON.parse(change);
+    change.elapsed = new Date() - start;
+    events.push(change);
+  });
+
+  feed.once('data', function(data) {
+    t.equal(data, '{"change":1}', 'First data event was the first change');
+    feed.pause();
+    setTimeout(function() { feed.resume(); }, 100);
+  });
+
+  feed.on('end', function() {
+    t.equal(feed.readable, false, 'Feed is no longer readable');
+    events.push('END');
+  });
+
+  setTimeout(checkEvents, 150);
+  feed.end(all);
+
+  function checkEvents() {
+    t.equal(events.length, 3 + 1, 'Three data events, plus the end event');
+
+    t.ok(events[0].elapsed < 10, 'Immediate emit first data event');
+    t.ok(events[1].elapsed >= 100 && events[1].elapsed < 125, 'About 100ms delay until the second event');
+    t.ok(events[2].elapsed - events[1].elapsed < 10, 'Immediate emit of subsequent event after resume');
+    t.equal(events[3], 'END', 'End event was fired');
+
+    t.end();
+  }
+});
+
 test('Paused while heartbeats are arriving', function(t) {
   var feed = new follow.Changes({'feed':'continuous'})
     , start = new Date
