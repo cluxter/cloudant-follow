@@ -1,6 +1,7 @@
 # UNRELEASED
 - [NEW] Allow a custom HTTP agent to be specified.
 - [NEW] Trim the database URL if it includes the `/_changes` endpoint.
+- [NEW] Support type "normal" and type "longpoll" feeds.
 - [FIXED] Retry `/_db_updates` request using the last recorded sequence value as
   the `since` query parameter.
 

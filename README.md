@@ -81,11 +81,12 @@ All of the CouchDB _changes options are allowed. See http://guide.couchdb.org/dr
 * `db` | Fully-qualified URL of a couch database. (Basic auth URLs are ok.)
 * `since` | The sequence number to start from. Use `"now"` to start from the latest change in the DB.
 * `heartbeat` | Milliseconds within which CouchDB must respond (default: **30000** or 30 seconds)
-* `feed` | **Optional but only "continuous" is allowed**
+* `feed` | Only types "continuous" (or alias "live") _(default)_, "longpoll" and "normal" are supported.
 * `filter` |
   * **Either** a path to design document filter, e.g. `app/important`
   * **Or** a Javascript `function(doc, req) { ... }` which should return true or false
-* `view`  | a path to design document view, e.g. `app/myView`
+* `limit` | Limit the number of changes to the specified value.
+* `view`  | A path to design document view, e.g. `app/myView`
 * `query_params` | **Optional** for use in with `filter` functions, passed as `req.query` to the filter function
 
 Besides the CouchDB options, more are available:
