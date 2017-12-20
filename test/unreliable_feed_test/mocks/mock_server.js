@@ -86,6 +86,7 @@ const cfg = {
   // options not configurable via the CLI
   feed: 'normal',
   limit: -1, // infinite
+  seq_interval: 1,
   since: 0
 };
 
@@ -157,6 +158,9 @@ class Response {
     }
     if (query.limit) {
       this._cfg.limit = parseInt(query.limit, 10);
+    }
+    if (query.seq_interval) {
+      this._cfg.seq_interval = parseInt(query.seq_interval, 10);
     }
     if (query.seq_interval) {
       this._cfg.seq_interval = parseInt(query.seq_interval, 10);
@@ -257,13 +261,18 @@ class Response {
         stop = true;
       }
 
+      let seq = null;
+      if (i === 1 || self.requestType === 'db_updates' || i % self._cfg.seq_interval === 0) {
+        seq = `"${updateCount}-xxxxxxxx"`;
+      }
+
       let update;
       if (self.requestType === 'changes') {
         // `/_changes`
-        update = `{"seq":"${updateCount}-xxxxxxxx","id":"doc${updateCount}","changes":[{"rev":"1-xxxxxxxx"}]}`;
+        update = `{"seq":${seq},"id":"doc${updateCount}","changes":[{"rev":"1-xxxxxxxx"}]}`;
       } else if (self.requestType === 'db_updates') {
         // `/_db_updates`
-        update = `{"db_name":"db${updateCount}","type":"created","seq":"${updateCount}-xxxxxxxx"}`;
+        update = `{"db_name":"db${updateCount}","type":"created","seq":${seq}}`;
       } else {
         throw new Error(`Unknown request type: ${self.requestType}`);
       }
