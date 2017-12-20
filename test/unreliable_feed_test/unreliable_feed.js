@@ -58,6 +58,100 @@ tap.afterEach(function(done) {
   done();
 });
 
+// feed=longpoll
+
+tap.test('Captures all changes in unreliable longpoll `/_changes` feed', { timeout: 300000 }, function(t) {
+  var actualChanges = [];
+  var expectedChanges = [];
+  var pollSize = 10;
+
+  // build expected changes array
+  for (let i = 1; i <= pollSize; i++) {
+    expectedChanges.push(`doc${i}`);
+  }
+
+  var feed = new follow.Feed();
+  feed.db = `http://localhost:${port}/foo`;
+  feed.feed = 'longpoll';
+  feed.limit = pollSize;
+
+  var seenHeartbeat = false;
+
+  feed
+    .on('error', function(error) {
+      t.fail(`Unexpected error: ${error}`);
+    })
+    .on('heartbeat', function() {
+      seenHeartbeat = true;
+    })
+    .on('change', function(change) {
+      let i = actualChanges.indexOf(change.id);
+      t.equal(i, -1, `Unseen change for doc '${change.id}'.`);
+      t.ok(change.seq, 'Valid seq for change.');
+
+      actualChanges.push(change.id);
+    })
+    .on('last_seq', function(seq) {
+      if (seenHeartbeat) {
+        // only expect one change
+        t.equal(seq, '1-xxxxxxxx');
+        t.deepEqual(actualChanges, ['doc1']);
+      } else {
+        t.equal(seq, `${pollSize}-xxxxxxxx`);
+        t.deepEqual(actualChanges, expectedChanges);
+      }
+      t.end();
+    });
+
+  feed.follow();
+});
+
+tap.test('Captures all changes in unreliable longpoll `/_db_updates` feed', { timeout: 300000 }, function(t) {
+  var actualUpdates = [];
+  var expectedUpdates = [];
+  var pollSize = 10;
+
+  // build expected updates array
+  for (let i = 1; i <= pollSize; i++) {
+    expectedUpdates.push(`db${i}`);
+  }
+
+  var feed = new follow.Feed();
+  feed.db = `http://localhost:${port}/_db_updates`;
+  feed.feed = 'longpoll';
+  feed.limit = pollSize;
+
+  var seenHeartbeat = false;
+
+  feed
+    .on('error', function(error) {
+      t.fail(`Unexpected error: ${error}`);
+    })
+    .on('heartbeat', function() {
+      seenHeartbeat = true;
+    })
+    .on('change', function(change) {
+      let i = actualUpdates.indexOf(change.db_name);
+      t.equal(i, -1, `Unseen update for db '${change.db_name}'.`);
+      t.equal(change.type, 'created', 'Found expected change type "created".');
+
+      actualUpdates.push(change.db_name);
+    })
+    .on('last_seq', function(seq) {
+      if (seenHeartbeat) {
+        // only expect one change
+        t.equal(seq, '1-xxxxxxxx');
+        t.deepEqual(actualUpdates, ['db1']);
+      } else {
+        t.equal(seq, `${pollSize}-xxxxxxxx`);
+        t.deepEqual(actualUpdates, expectedUpdates);
+      }
+      t.end();
+    });
+
+  feed.follow();
+});
+
 // feed=continuous
 
 tap.test('Captures all changes in unreliable continuous `/_changes` feed', { timeout: 300000 }, function(t) {
