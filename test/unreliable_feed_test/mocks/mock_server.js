@@ -30,6 +30,7 @@ const defaults = {
   port: 3000,
   probOfDelay: 0.3, // [0, 1]
   probOf500: 0.2, // [0, 1]
+  timeout: 60000, // ms
   totalUpdates: 123456789
 };
 
@@ -63,7 +64,10 @@ program
   .option('-p, --port <n>',
     `Port to listen on (default: ${defaults.port})`,
     Number, defaults.port)
-  .option('-t, --total-updates <n>',
+  .option('-t, --timeout <n>',
+    `Maximum period to wait for a change before the response is sent (default: ${defaults.timeout})`,
+    Number, defaults.timeout)
+  .option('-u, --total-updates <n>',
     `Total number of updates available in the feed (default: ${defaults.totalUpdates})`,
     Number, defaults.totalUpdates)
   .parse(process.argv);
@@ -77,8 +81,12 @@ const cfg = {
   port: program.port,
   probOfDelay: program.delayProbability,
   probOf500: program.errorProbability,
-  since: 0,
-  totalUpdates: program.totalUpdates
+  totalUpdates: program.totalUpdates,
+  timeout: program.timeout,
+  // options not configurable via the CLI
+  feed: 'normal',
+  limit: -1, // infinite
+  since: 0
 };
 
 console.log('Mock server configuration:');
@@ -118,16 +126,9 @@ class Response {
 
     this.response = response;
     this.request = request;
+    this.requestType = 'other';
 
-    this.query = this._parseQuery();
-
-    if (this.query.pathname.endsWith('_changes')) {
-      this.requestType = 'changes';
-    } else if (this.query.pathname.endsWith('_db_updates')) {
-      this.requestType = 'db_updates';
-    } else {
-      this.requestType = 'other';
-    }
+    this._parseQuery();
   }
 
   _parseQuery() {
@@ -140,17 +141,32 @@ class Response {
     if (pathname.endsWith('/')) {
       pathname = pathname.slice(0, -1); // remove trailing slash
     }
-    query.pathname = pathname;
+
+    if (pathname.endsWith('_changes')) {
+      this.requestType = 'changes';
+    } else if (pathname.endsWith('_db_updates')) {
+      this.requestType = 'db_updates';
+    }
 
     // parse query arguments
+    if (query.feed) {
+      this._cfg.feed = query.feed;
+    }
     if (query.heartbeat) {
       this._cfg.heartbeat = parseInt(query.heartbeat, 10);
+    }
+    if (query.limit) {
+      this._cfg.limit = parseInt(query.limit, 10);
+    }
+    if (query.seq_interval) {
+      this._cfg.seq_interval = parseInt(query.seq_interval, 10);
     }
     if (query.since) {
       this._cfg.since = parseInt(query.since.split('-')[0], 10);
     }
-
-    return query;
+    if (query.timeout) {
+      this._cfg.timeout = parseInt(query.timeout, 10);
+    }
   }
 
   send() {
@@ -169,29 +185,74 @@ class Response {
     // set TE header
     self.response.setHeader('Transfer-Encoding', 'chunked');
 
-    var updateCount = self._cfg.since; // start seq
-
     if (Math.random() <= self._cfg.probOf500) {
       // send 500
       console.log('Returning 500!');
       self.response.writeHead(500);
-      self.response.end('{"error":"internal_server_error"}');
+      self.response.end('{"error":"internal_server_error"}\n');
+      return;
+    }
+
+    if ([ 'continuous', 'eventsource', 'live', 'longpoll', 'normal' ].indexOf(self._cfg.feed) === -1) {
+      // send 400
+      console.log('Returning 400!');
+      self.response.writeHead(400);
+      self.response.end('{"error":"bad_request","reason":"Supported `feed` types: normal, continuous, live, longpoll, eventsource"}\n');
       return;
     }
 
     // send 200
     var p = sleep(0); // no delay for first update
-    var abort = false;
+
     var stop = false;
 
+    if (self._cfg.feed === 'longpoll') {
+      self._cfg.feed = 'normal';
+
+      // maybe send heartbeat(s)
+      let sleepMs = getRandomArbitrary(self._cfg.minDelay, self._cfg.maxDelay);
+
+      if (sleepMs >= self._cfg.timeout) {
+        console.log(`Timeout exceeded. Sending last_seq!`);
+        stop = true;
+      }
+
+      while (sleepMs >= self._cfg.heartbeat) {
+        self._cfg.limit = 1;
+        sleepMs -= self._cfg.heartbeat;
+        p = p.then(sleep(self._cfg.heartbeat)).then(
+          () => { self.response.write('\n'); } // send heartbeat
+        );
+      }
+    }
+
+    if (self._cfg.feed === 'normal') {
+      p.then(() => { self.response.write('{"results":[\n'); });
+    }
+
+    var i = 0;
+    var updateCount = self._cfg.since; // start seq
+
+    var abort = false;
+
     while (!stop) {
+      if (self._cfg.limit === 0 || updateCount >= self._cfg.totalUpdates) {
+        console.log(`Reached seq limit '${updateCount}'. Stopping feed and sending last_seq!`);
+        stop = true;
+        break;
+      }
+
+      i++;
       updateCount++;
 
-      if (updateCount % self._cfg.abortEvery === 0) {
+      if (self._cfg.limit > 0 && i >= self._cfg.limit) {
+        console.log(`Reached update limit of '${self._cfg.limit}'. Sending last_seq!`);
+        stop = true;
+      } else if (updateCount % self._cfg.abortEvery === 0) {
         console.log(`Aborting response on seq '${updateCount}'!`);
         abort = true;
         stop = true;
-      } else if (updateCount % self._cfg.lastSeqEvery === 0 || updateCount >= self._cfg.totalUpdates) {
+      } else if (updateCount % self._cfg.lastSeqEvery === 0) {
         console.log(`Faking maintenance mode on seq '${updateCount}'. Sending last_seq!`);
         stop = true;
       }
@@ -208,29 +269,49 @@ class Response {
       }
 
       // write update
-      p = p.then(() => {
-        self.response.write(update + '\n');
-      });
+      if (self._cfg.feed === 'normal' && !stop) {
+        p = p.then(() => { self.response.write(update + ',\n'); });
+      } else {
+        p = p.then(() => { self.response.write(update + '\n'); });
+      }
 
-      if (Math.random() <= self._cfg.probOfDelay) {
+      if (['longpoll', 'normal'].indexOf(self._cfg.feed) === -1 && Math.random() <= self._cfg.probOfDelay) {
         // maybe send heartbeat
         let sleepMs = getRandomArbitrary(self._cfg.minDelay, self._cfg.maxDelay);
+
+        if (sleepMs >= self._cfg.timeout) {
+          console.log(`Timeout exceeded. Sending last_seq!`);
+          stop = true;
+        }
+
         while (sleepMs >= self._cfg.heartbeat) {
           sleepMs -= self._cfg.heartbeat;
           p = p.then(sleep(self._cfg.heartbeat)).then(
             () => { self.response.write('\n'); } // send heartbeat
           );
         }
-
-        // sleep
-        p = p.then(sleep(sleepMs));
+        p = p.then(sleep(sleepMs)); // sleep
       }
     }
 
     if (!abort) {
       p = p.then(() => {
         // send last_seq
-        self.response.write(`{"last_seq":"${updateCount}-xxxxxxxx","pending":${self._cfg.totalUpdates - updateCount}}\n`);
+        var pending = self._cfg.totalUpdates - updateCount;
+        if (pending < 0) {
+          pending = 0;
+        }
+
+        var last_seq = updateCount;
+        if (last_seq > self._cfg.totalUpdates) {
+          last_seq = self._cfg.totalUpdates;
+        }
+
+        if (self._cfg.feed === 'normal') {
+          self.response.write(`],\n"last_seq":"${last_seq}-xxxxxxxx","pending":${pending}}\n`);
+        } else {
+          self.response.write(`{"last_seq":"${last_seq}-xxxxxxxx","pending":${pending}}\n`);
+        }
       });
     }
 
