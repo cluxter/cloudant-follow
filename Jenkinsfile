@@ -15,26 +15,28 @@
 
 def setupNodeAndTest(version) {
   node {
-    // Install CouchDB 1.6.1
-    docker.image('apache/couchdb:1.7.1').withRun('-p 5984:5984') {
-      // Install NVM
-      sh 'wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.33.2/install.sh | bash'
-      // Unstash the built content
-      unstash name: 'built'
-      // Run tests using creds
-      withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'couchdb', usernameVariable: 'user', passwordVariable: 'pass']]) {
-        withEnv(["NVM_DIR=${env.HOME}/.nvm", "TAP_TIMEOUT=300"]) {
-          // Actions:
-          //  1. Load NVM
-          //  2. Install/use required Node.js version
-          //  3. Run tests
-          sh """
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            nvm install ${version}
-            nvm use ${version}
-            wget --retry-connrefused http://localhost:5984
-            npm test && npm run unreliable-feed-test
-          """
+    docker.withServer('unix://var/run/docker.sock') {
+      // Install CouchDB 1.6.1
+      docker.image('apache/couchdb:1.7.1').withRun('-p 5984:5984') {
+        // Install NVM
+        sh 'wget -qO- https://raw.githubusercontent.com/creationix/nvm/v0.33.2/install.sh | bash'
+        // Unstash the built content
+        unstash name: 'built'
+        // Run tests using creds
+        withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId: 'couchdb', usernameVariable: 'user', passwordVariable: 'pass']]) {
+          withEnv(["NVM_DIR=${env.HOME}/.nvm", "TAP_TIMEOUT=300"]) {
+            // Actions:
+            //  1. Load NVM
+            //  2. Install/use required Node.js version
+            //  3. Run tests
+            sh """
+              [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+              nvm install ${version}
+              nvm use ${version}
+              wget --retry-connrefused http://localhost:5984
+              npm test && npm run unreliable-feed-test
+            """
+          }
         }
       }
     }
